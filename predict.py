@@ -17,6 +17,25 @@ total_put     = float(input("Total Put OI: "))
 feats = ['call_volume', 'put_volume', 'total_call', 'total_put']
 live  = [call_volume, put_volume, total_call, total_put]
 
+# ==========================================
+# PRIMARY SIGNAL: OI CHANGE LOGIC
+# ==========================================
+# This is the CORE rule: Follow the option writers
+if put_volume > call_volume:
+    oi_signal = "BUY CALL"
+    oi_reason = f"Put OI increasing more (+{put_volume:,} vs +{call_volume:,}) → Put writers bullish"
+else:
+    oi_signal = "BUY PUT"
+    oi_reason = f"Call OI increasing more (+{call_volume:,} vs +{put_volume:,}) → Call writers bearish"
+
+print(f"\n{'='*60}")
+print(f"PRIMARY OI SIGNAL: {oi_signal}")
+print(f"Reason: {oi_reason}")
+print(f"{'='*60}")
+
+# ==========================================
+# SECONDARY SIGNAL: KNN PATTERN MATCHING
+# ==========================================
 dist = 0
 for f, v in zip(feats, live):
     s = df[f].std()
@@ -36,18 +55,43 @@ if 'points_change' in near.columns:
 print(near[print_cols])
 
 if call_votes >= put_votes:
-    print(f"\nSuggestion: BUY CALL  (history {call_votes}-{put_votes})")
-    suggestion = "BUY CALL"
+    knn_signal = "BUY CALL"
+    print(f"\nKNN Pattern Signal: BUY CALL  (history {call_votes}-{put_votes})")
 else:
-    print(f"\nSuggestion: BUY PUT   (history {put_votes}-{call_votes})")
-    suggestion = "BUY PUT"
+    knn_signal = "BUY PUT"
+    print(f"\nKNN Pattern Signal: BUY PUT   (history {put_votes}-{call_votes})")
+
+# ==========================================
+# FINAL DECISION: Combine Both Signals
+# ==========================================
+print("\n" + "="*60)
+print("FINAL DECISION LOGIC")
+print("="*60)
+
+if oi_signal == knn_signal:
+    # Both agree - HIGH CONFIDENCE
+    final_suggestion = oi_signal
+    confidence = "HIGH"
+    print(f"\n✅ BOTH SIGNALS AGREE: {final_suggestion}")
+    print(f"   Confidence: {confidence}")
+else:
+    # Conflict - Use OI logic as primary (it's real-time)
+    final_suggestion = oi_signal
+    confidence = "MEDIUM"
+    print(f"\n⚠️  SIGNAL CONFLICT DETECTED:")
+    print(f"   - OI Flow says:    {oi_signal} (Real-time smart money)")
+    print(f"   - KNN Pattern says: {knn_signal} (Historical pattern)")
+    print(f"\n   → Going with OI Flow (Primary Signal)")
+    print(f"   Confidence: {confidence} (Conflicting signals)")
+
+suggestion = final_suggestion
 
 # Expected Points Change
 avg_points = 0
 if 'points_change' in near.columns:
     avg_points = near['points_change'].mean()
     if avg_points >= 0:
-        print(f"Expected NIFTY Increase: +{avg_points:.2f} points")
+        print(f"\nExpected NIFTY Increase: +{avg_points:.2f} points")
     else:
         print(f"Expected NIFTY Decrease: {avg_points:.2f} points")
     print(f"Target NIFTY Price: {nifty_current + avg_points:.2f}")
@@ -88,23 +132,31 @@ elif live_pcr < 0.8:
 else:
     print("   → Neutral Signal: Balanced OI")
 
-# 3. OI Change Analysis
-print("\n3. OI CHANGE INTERPRETATION:")
+# 3. OI Change Analysis - THE CORE LOGIC
+print("\n3. OI CHANGE INTERPRETATION (CORE LOGIC):")
 print("-" * 60)
-if suggestion == "BUY CALL":
-    if call_volume < 0 and put_volume < 0:
-        print("   ⚠ WARNING: Both Call & Put OI decreasing")
-        print("   → Unwinding happening - trend may be weak")
-    elif call_volume > 0:
-        print("   ✓ Call OI Increasing - Fresh buying in Calls")
-    if put_volume < 0:
-        print("   ✓ Put OI Decreasing - Put writers covering (bullish)")
-else:  # BUY PUT
-    if put_volume > 0 and call_volume < 0:
-        print("   ✓ Put OI Increasing - Fresh buying in Puts")
-        print("   ✓ Call OI Decreasing - Call writers covering (bearish)")
-    elif put_volume < 0 and call_volume < 0:
-        print("   ⚠ WARNING: Both OI decreasing - Unwinding")
+
+oi_diff = put_volume - call_volume
+if oi_diff > 0:
+    print(f"   ✅ Net OI Flow: +{oi_diff:,} (Put side stronger)")
+    print("   → Put writers are MORE aggressive than Call writers")
+    print("   → This creates SUPPORT → Market likely to go UP")
+    print("   → Signal: BUY CALL")
+else:
+    print(f"   ✅ Net OI Flow: {oi_diff:,} (Call side stronger)")
+    print("   → Call writers are MORE aggressive than Put writers")
+    print("   → This creates RESISTANCE → Market likely to go DOWN")
+    print("   → Signal: BUY PUT")
+
+# Additional OI context
+if call_volume > 0 and put_volume > 0:
+    print("\n   📊 Both sides adding OI:")
+    if abs(oi_diff) < min(abs(call_volume), abs(put_volume)) * 0.3:
+        print("   → Close competition - High volatility expected")
+    else:
+        print("   → Clear winner - Directional move likely")
+elif call_volume < 0 and put_volume < 0:
+    print("\n   ⚠️  Both sides unwinding - Trend weakening")
 
 # 4. Risk Analysis from Historical Similar Candles
 print("\n4. RISK ANALYSIS (Based on Similar Past Candles):")
@@ -128,27 +180,27 @@ if 'points_change' in near.columns:
         print(f"   - Average Loss:  {avg_loss:+.2f} points")
         print(f"   → Consider Stop Loss: {nifty_current + avg_loss:.2f}")
 
-# 5. Reverse Engineering: What Would Invalidate This Setup?
+# 5. Setup Invalidation Conditions
 print("\n5. SETUP INVALIDATION CONDITIONS:")
 print("-" * 60)
 if suggestion == "BUY CALL":
     print("   This BUY CALL setup is INVALIDATED if:")
     print(f"   ✗ NIFTY falls below: {nifty_current - abs(avg_points):.2f} ({abs(avg_points):.0f} points SL)")
     if total_put > 0:
-        print(f"   ✗ Put OI increases by >20% from current: {total_put * 1.2:,.0f}")
-    print("   ✗ Call OI starts decreasing rapidly")
+        print(f"   ✗ Put OI stops increasing or decreases")
+        print(f"   ✗ Call OI increases by >20% from current: {total_call * 1.2:,.0f}")
 else:
     print("   This BUY PUT setup is INVALIDATED if:")
     print(f"   ✗ NIFTY rises above: {nifty_current + abs(avg_points):.2f} ({abs(avg_points):.0f} points SL)")
     if total_call > 0:
-        print(f"   ✗ Call OI increases by >20% from current: {total_call * 1.2:,.0f}")
-    print("   ✗ Put OI starts decreasing rapidly")
+        print(f"   ✗ Call OI stops increasing or decreases")
+        print(f"   ✗ Put OI increases by >20% from current: {total_put * 1.2:,.0f}")
 
 # 6. Optimal Entry/Exit Strategy
 print("\n6. SUGGESTED TRADING STRATEGY:")
 print("-" * 60)
 if 'points_change' in near.columns:
-    avg_gain = near[near['WINNER'].str.strip() == suggestion]['points_change'].mean() if len(near[near['WINNER'].str.strip() == suggestion]) > 0 else avg_points
+    avg_gain = near[near['WINNER'].str.strip() == suggestion]['points_change'].mean() if len(near[near['WINNER'].str.strip() == suggestion]) > 0 else abs(avg_points)
     
     print(f"   Entry:        Current NIFTY {nifty_current:.2f}")
     print(f"   Target 1:     {nifty_current + (avg_gain * 0.5):.2f} (+{(avg_gain * 0.5):.0f} pts) - Book 50%")
@@ -176,29 +228,34 @@ elif pcr < 0.8:
 else:
     print("🟡 BIAS: NEUTRAL / SIDEWAYS (Balanced OI)")
 
-# 2. Evaluate the OI Change (The Momentum)
-print("\nOI Change Analysis:")
-if call_volume > 0 and put_volume < 0:
-    print("⚠️  BEARISH CONFIRMATION: Call writers are adding positions, Put writers are running away.")
-elif put_volume > 0 and call_volume < 0:
-    print(" BULLISH CONFIRMATION: Put writers are adding positions, Call writers are running away.")
+# 2. Evaluate the OI Change (The Momentum) - THIS IS THE KEY
+print("\nOI Change Momentum Analysis:")
+if put_volume > call_volume and put_volume > 0:
+    print(" BULLISH MOMENTUM: Put writers adding MORE than Call writers")
+    print("   → Smart money expects market to stay UP")
+elif call_volume > put_volume and call_volume > 0:
+    print("️  BEARISH MOMENTUM: Call writers adding MORE than Put writers")
+    print("   → Smart money expects market to stay DOWN")
 elif call_volume > 0 and put_volume > 0:
-    print("⚖️  BOTH SIDES BUILDING: A massive volatile move (breakout) is coming. Wait for direction.")
-    print(f"   → If NIFTY crosses {nifty_current + 30}, expect a massive UP explosion (Call Short Covering).")
-    print(f"   → If NIFTY falls below {nifty_current - 30}, expect a massive DOWN crash (Put Unwinding).")
+    print("⚖️  BOTH SIDES BUILDING: A massive volatile move (breakout) is coming.")
+    if abs(put_volume - call_volume) < min(put_volume, call_volume) * 0.2:
+        print("   → Very close battle - Wait for price breakout confirmation")
+        print(f"   → If NIFTY crosses {nifty_current + 30}, expect massive UP (Call Short Covering)")
+        print(f"   → If NIFTY falls below {nifty_current - 30}, expect massive DOWN (Put Unwinding)")
 else:
-    print("📉 BOTH SIDES UNWINDING: Market is losing interest. Expect low volatility / sideways chop.")
+    print("📉 BOTH SIDES UNWINDING: Market losing interest. Expect sideways chop.")
 
 # 3. Cross-Check with Algorithm Suggestion
-print("\nLogic Cross-Check:")
-if suggestion == "BUY CALL" and pcr < 0.8:
-    print("⚠️  WARNING: Algorithm suggests BUY CALL, but PCR is Bearish (< 0.8).")
-    print("   → This might be a 'Short Covering' breakout play. Keep Stop Loss very tight!")
-elif suggestion == "BUY PUT" and pcr > 1.1:
-    print("⚠️  WARNING: Algorithm suggests BUY PUT, but PCR is Bullish (> 1.1).")
-    print("   → Fighting the support wall. High risk of a bounce. Keep Stop Loss very tight!")
+print("\nSignal Validation:")
+if oi_signal == knn_signal:
+    print("✅ PERFECT ALIGNMENT: OI Flow + Historical Pattern agree")
+    print("   → High probability setup")
 else:
-    print("✅ Algorithm suggestion aligns with Smart Money OI flow.")
+    print("⚠️  SIGNAL DIVERGENCE:")
+    print(f"   - Real-time OI says: {oi_signal}")
+    print(f"   - Historical KNN says: {knn_signal}")
+    print("   → Trusting OI Flow (real-time smart money action)")
+    print("   → Reduce position size due to conflicting signals")
 
 print("="*60)
 
@@ -208,7 +265,6 @@ print("="*60)
 save_data = input("\nDo you want to save these inputs to train.csv? (y/n): ").strip().lower()
 
 if save_data == 'y':
-    # Create a dictionary for the new row
     new_row = {
         'nifty_before': nifty_current,
         'call_volume': call_volume,
@@ -220,11 +276,10 @@ if save_data == 'y':
         'nifty_after': 0
     }
     
-    # Convert to DataFrame and append to CSV
     pd.DataFrame([new_row]).to_csv('train.csv', mode='a', header=False, index=False)
     
     print("\n✅ Successfully saved to train.csv!")
-    print("⚠️  Remember to update the 'WINNER' and 'points_change' columns later once the candle closes.")
+    print("⚠️  Remember to update the 'WINNER' and 'points_change' columns later.")
 else:
     print("\nData not saved.")
 
